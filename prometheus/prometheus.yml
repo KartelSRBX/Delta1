@@ -7,8 +7,12 @@ scrape_configs:
     static_configs:
       - targets: ["generator:8000"]
   - job_name: processor
-    static_configs:
-      - targets: ["processor:8001"]
+    # DNS discovery, so every replica of `docker compose up --scale processor=N` is scraped.
+    dns_sd_configs:
+      - names: ["processor"]
+        type: A
+        port: 8001
+        refresh_interval: 10s
   - job_name: clickhouse
     static_configs:
       - targets: ["clickhouse:9363"]

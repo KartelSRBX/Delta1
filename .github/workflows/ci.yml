@@ -19,6 +19,8 @@ jobs:
       - run: ruff check .
       - run: ruff format --check .
       - run: pytest
+      - name: Benchmark scripts run (pipeline micro-benchmark, small)
+        run: python scripts/bench_pipeline.py --events 20000 --repeat 1
       - name: Dashboards are up to date with their builder
         run: |
           python grafana/build_dashboards.py
@@ -75,6 +77,8 @@ jobs:
           python scripts/smoke_test.py
       - name: Smoke test (batch)
         run: python scripts/smoke_test.py --batch
+      - name: Query benchmark (small) returns identical results across strategies
+        run: python scripts/bench_queries.py --rows 1000000 --bets 100000 --repeat 2
       - name: No failed DAG runs
         run: |
           for dag in delta1_fx_rates delta1_provider_reconciliation delta1_daily_marts; do
