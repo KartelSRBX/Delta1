@@ -85,6 +85,8 @@ class Board:
             defaults["thresholds"] = {"mode": "absolute", "steps": thresholds}
         default_mode = "thresholds" if kind == "stat" else "palette-classic"
         defaults["color"] = {"mode": color_mode or default_mode}
+        if color_mode == "fixed":
+            defaults["color"]["fixedColor"] = "#5794F2"
         panel = {
             "id": self._next_id,
             "type": kind,
@@ -381,8 +383,7 @@ def business() -> Board:
             "xField": "provider",
         },
         custom={"fillOpacity": 80, "lineWidth": 0},
-        thresholds=[{"color": "#F2495C", "value": None}, {"color": "#73BF69", "value": 0}],
-        color_mode="thresholds",
+        color_mode="fixed",
     )
 
     b.row("Sportsbook")
@@ -413,7 +414,7 @@ def business() -> Board:
             ch(
                 f"""SELECT sport, sum(bets) AS settled,
                     sumIf(bets, status = 'won') / sum(bets) AS win_rate,
-                    sum({eur("stake")}) AS stake_eur, sum({eur("payout")}) AS payout_eur,
+                    sum({eur("stake")}) AS stake_eur,
                     1 - sum({eur("payout")}) / sum({eur("stake")}) AS hold
                 FROM delta1.sport_ggr_1m WHERE $__timeFilter(minute)
                 GROUP BY sport ORDER BY stake_eur DESC"""
@@ -425,7 +426,6 @@ def business() -> Board:
         overrides=[
             _unit_override("win_rate", "percentunit", 1, "Win rate"),
             _unit_override("stake_eur", "currencyEUR", 0, "Stake"),
-            _unit_override("payout_eur", "currencyEUR", 0, "Payout"),
             _unit_override("hold", "percentunit", 1, "Hold"),
         ],
         description="Hold = 1 - payout / stake. The simulator prices bets with a 6% margin.",
