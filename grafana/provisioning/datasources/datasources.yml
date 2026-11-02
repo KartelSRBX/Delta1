@@ -1,0 +1,22 @@
+apiVersion: 1
+
+datasources:
+  - name: ClickHouse
+    uid: clickhouse
+    type: grafana-clickhouse-datasource
+    isDefault: true
+    jsonData:
+      host: clickhouse
+      port: 8123
+      protocol: http
+      username: ${CLICKHOUSE_USER}
+      defaultDatabase: delta1
+    secureJsonData:
+      password: ${CLICKHOUSE_PASSWORD}
+
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    url: http://prometheus:9090
+    jsonData:
+      timeInterval: 5s
