@@ -665,9 +665,226 @@ def pipeline() -> Board:
     return b
 
 
+# --------------------------------------------------------------------------- batch
+def batch() -> Board:
+    b = Board("delta1-batch", "Delta1 · Partners and batch", refresh="30s", time_from="now-3h")
+
+    recon = "FROM delta1.reconciliation FINAL WHERE $__timeFilter(window_start)"
+    red_if_any = [{"color": "#73BF69", "value": None}, {"color": "#F2495C", "value": 1}]
+
+    b.row("Provider reconciliation")
+    b.add(
+        "stat",
+        "Match rate",
+        [ch(f"SELECT countIf(status = 'ok') / count() AS match_rate {recon}")],
+        6,
+        4,
+        unit="percentunit",
+        decimals=1,
+        thresholds=[
+            {"color": "#F2495C", "value": None},
+            {"color": "#FF9830", "value": 0.9},
+            {"color": "#73BF69", "value": 0.98},
+        ],
+        options=STAT,
+        description="Share of (window, provider, game, currency) rows where provider "
+        "numbers match ours within 0.1%.",
+    )
+    b.add(
+        "stat",
+        "Windows reconciled",
+        [ch(f"SELECT uniqExact(window_start) AS windows {recon}")],
+        6,
+        4,
+        thresholds=BLUE,
+        options=STAT,
+    )
+    b.add(
+        "stat",
+        "Amount mismatches",
+        [ch(f"SELECT countIf(status = 'mismatch') AS mismatches {recon}")],
+        6,
+        4,
+        thresholds=red_if_any,
+        options=STAT,
+    )
+    b.add(
+        "stat",
+        "Missing rows",
+        [ch(f"SELECT countIf(status LIKE 'missing%') AS missing {recon}")],
+        6,
+        4,
+        thresholds=red_if_any,
+        options=STAT,
+        description="Rows that exist on only one side: we recorded play the provider did "
+        "not report, or the other way round.",
+    )
+    b.add(
+        "timeseries",
+        "Reconciliation status per window",
+        [
+            ch(
+                f"""SELECT window_start AS time, status, count() AS row_count {recon}
+                GROUP BY time, status ORDER BY time""",
+                TIMESERIES,
+            )
+        ],
+        24,
+        7,
+        custom={**STACKED, "drawStyle": "bars", "fillOpacity": 80},
+        options=TS_OPTS,
+        overrides=[
+            _color_override("row_count ok", "#73BF69"),
+            _color_override("row_count mismatch", "#F2495C"),
+            _color_override("row_count missing_in_report", "#FF9830"),
+            _color_override("row_count missing_on_platform", "#B877D9"),
+        ],
+    )
+    b.add(
+        "table",
+        "Open discrepancies",
+        [
+            ch(
+                f"""SELECT window_start AS window, provider, game_id AS game, currency, status,
+                    platform_bets, provider_bets, bets_diff_pct
+                {recon} AND status != 'ok'
+                ORDER BY window_start DESC LIMIT 50"""
+            )
+        ],
+        24,
+        8,
+        options={"showHeader": True, "cellHeight": "sm"},
+        overrides=[
+            _unit_override("bets_diff_pct", "percentunit", 2, "Bets diff"),
+            _unit_override("platform_bets", "none", 2, "Our bets"),
+            _unit_override("provider_bets", "none", 2, "Their bets"),
+        ],
+        description="Amounts in the original currency. Each row is something to raise "
+        "with the provider before invoicing.",
+    )
+
+    b.row("Daily marts (today)")
+    b.add(
+        "stat",
+        "Mart freshness",
+        [ch("SELECT dateDiff('second', max(built_at), now()) AS age FROM delta1.player_daily")],
+        6,
+        4,
+        unit="s",
+        thresholds=[
+            {"color": "#73BF69", "value": None},
+            {"color": "#FF9830", "value": 1800},
+            {"color": "#F2495C", "value": 3600},
+        ],
+        options=STAT,
+        description="Time since the daily marts DAG last published (every 15 min by default).",
+    )
+    b.add(
+        "stat",
+        "Players in today's mart",
+        [ch("SELECT count() AS players FROM delta1.player_daily WHERE day = today()")],
+        6,
+        4,
+        thresholds=BLUE,
+        options=STAT,
+    )
+    b.add(
+        "stat",
+        "GGR today (mart)",
+        [ch("SELECT sum(ggr_eur) AS ggr FROM delta1.player_daily WHERE day = today()")],
+        6,
+        4,
+        unit="currencyEUR",
+        decimals=0,
+        thresholds=GREEN,
+        options=STAT,
+    )
+    b.add(
+        "stat",
+        "Depositing players today",
+        [
+            ch(
+                "SELECT countIf(deposits > 0) / count() AS share FROM delta1.player_daily "
+                "WHERE day = today()"
+            )
+        ],
+        6,
+        4,
+        unit="percentunit",
+        decimals=1,
+        thresholds=ORANGE,
+        options=STAT,
+    )
+    b.add(
+        "table",
+        "Top players by GGR today",
+        [
+            ch(
+                """SELECT player_id, brand, casino_rounds AS rounds, sport_bets_placed AS bets,
+                    ggr_eur
+                FROM delta1.player_daily WHERE day = today()
+                ORDER BY ggr_eur DESC LIMIT 15"""
+            )
+        ],
+        12,
+        10,
+        options={"showHeader": True, "cellHeight": "sm"},
+        overrides=[_unit_override("ggr_eur", "currencyEUR", 2, "GGR")],
+    )
+    b.add(
+        "table",
+        "Provider daily: RTP by game",
+        [
+            ch(
+                """SELECT provider, game_id AS game, sum(rounds) AS rounds, sum(ggr_eur) AS ggr,
+                    1 - sum(ggr_eur) / sum(turnover_eur) AS rtp
+                FROM delta1.provider_daily WHERE day = today()
+                GROUP BY provider, game ORDER BY ggr DESC"""
+            )
+        ],
+        12,
+        10,
+        options={"showHeader": True, "cellHeight": "sm"},
+        overrides=[
+            _unit_override("ggr", "currencyEUR", 0, "GGR"),
+            _unit_override("rtp", "percentunit", 2, "RTP"),
+        ],
+        description="Built from the provider_daily mart; RTP is EUR-weighted across currencies.",
+    )
+
+    b.row("FX rates (partner API, hourly)")
+    for currency, w in (("USD", 12), ("RSD", 12)):
+        b.add(
+            "timeseries",
+            f"EUR per 1 {currency}",
+            [
+                ch(
+                    f"""SELECT as_of AS time, argMax(rate_to_eur, loaded_at) AS rate
+                    FROM delta1.fx_rates_history
+                    WHERE currency = '{currency}' AND $__timeFilter(as_of)
+                    GROUP BY time ORDER BY time""",
+                    TIMESERIES,
+                )
+            ],
+            w,
+            7,
+            decimals=6,
+            custom={**LINE, "showPoints": "always", "pointSize": 6},
+            options={**TS_OPTS, "legend": {"showLegend": False}},
+        )
+    return b
+
+
+def _color_override(name: str, color: str) -> dict:
+    return {
+        "matcher": {"id": "byName", "options": name},
+        "properties": [{"id": "color", "value": {"mode": "fixed", "fixedColor": color}}],
+    }
+
+
 def main() -> None:
     OUT.mkdir(exist_ok=True)
-    for board in (business(), pipeline()):
+    for board in (business(), pipeline(), batch()):
         name = board.uid.removeprefix("delta1-")
         (OUT / f"{name}.json").write_text(json.dumps(board.json(), indent=2) + "\n")
         print(f"wrote {OUT / name}.json ({len(board.panels)} panels)")

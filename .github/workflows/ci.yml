@@ -24,21 +24,47 @@ jobs:
           python grafana/build_dashboards.py
           git diff --exit-code grafana/dashboards
 
+  dags:
+    name: Airflow DAG integrity
+    runs-on: ubuntu-latest
+    env:
+      AIRFLOW_HOME: /tmp/airflow
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__CORE__DAGS_FOLDER: ${{ github.workspace }}/airflow/dags
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install Airflow with its constraints
+        run: |
+          pip install "apache-airflow==2.10.3" "clickhouse-connect==0.8.11" pytest \
+            --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-2.10.3/constraints-3.12.txt"
+      - run: airflow db migrate
+      - run: pytest tests/test_dags.py -v
+        env:
+          PYTHONPATH: airflow/dags
+
   e2e:
-    name: End-to-end (Kafka -> processor -> ClickHouse)
+    name: End-to-end (stream + Airflow)
     runs-on: ubuntu-latest
     needs: test
+    env:
+      EVENTS_PER_SECOND: "400"
+      REPORT_WINDOW_MINUTES: "1"
+      MARTS_INTERVAL_MINUTES: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
       - run: pip install clickhouse-connect
-      - name: Start the pipeline
-        run: docker compose up -d --build kafka clickhouse generator processor
-        env:
-          EVENTS_PER_SECOND: "400"
-      - name: Smoke test
+      - name: Start the pipeline, partner mock and Airflow
+        run: >-
+          docker compose up -d --build
+          kafka clickhouse generator processor partners airflow-db airflow-init airflow-scheduler
+      - name: Smoke test (stream)
         run: python scripts/smoke_test.py
       - name: Survives a ClickHouse outage
         run: |
@@ -47,6 +73,15 @@ jobs:
           docker compose start clickhouse
           sleep 30
           python scripts/smoke_test.py
+      - name: Smoke test (batch)
+        run: python scripts/smoke_test.py --batch
+      - name: No failed DAG runs
+        run: |
+          for dag in delta1_fx_rates delta1_provider_reconciliation delta1_daily_marts; do
+            failed=$(docker compose exec -T airflow-scheduler \
+              airflow dags list-runs -d "$dag" --state failed -o plain 2>/dev/null | tail -n +2)
+            if [ -n "$failed" ]; then echo "$dag has failed runs:"; echo "$failed"; exit 1; fi
+          done
       - name: Logs on failure
         if: failure()
         run: docker compose logs --tail 200
