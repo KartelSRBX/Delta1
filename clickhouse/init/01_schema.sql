@@ -15,7 +15,9 @@ CREATE TABLE IF NOT EXISTS delta1.fx_rates
 ENGINE = ReplacingMergeTree(updated_at)
 ORDER BY currency;
 
-INSERT INTO delta1.fx_rates (currency, rate_to_eur) VALUES ('EUR', 1), ('USD', 0.92), ('RSD', 0.0085);
+-- Seed rows are dated in the past so any rate loaded later wins argMax(rate, updated_at).
+INSERT INTO delta1.fx_rates (currency, rate_to_eur, updated_at) VALUES
+    ('EUR', 1, '2000-01-01 00:00:00'), ('USD', 0.92, '2000-01-01 00:00:00'), ('RSD', 0.0085, '2000-01-01 00:00:00');
 
 -- Dictionary keeps rates in memory so dashboards convert with dictGet instead of a JOIN.
 -- Demo credentials only: in production this would use a dedicated read-only user.

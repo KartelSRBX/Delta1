@@ -7,9 +7,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 COPY pyproject.toml README.md ./
 COPY src ./src
-RUN pip install .
+RUN pip install '.[partners]'
 
-RUN useradd --create-home --uid 10001 delta1
+RUN useradd --create-home --uid 10001 delta1 && mkdir -p /data/reports && chown delta1 /data/reports
 USER delta1
 
 # The same image runs both services; docker-compose picks the command.
