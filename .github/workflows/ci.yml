@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: Lint and unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e '.[dev]'
+      - run: ruff check .
+      - run: ruff format --check .
+      - run: pytest
+      - name: Dashboards are up to date with their builder
+        run: |
+          python grafana/build_dashboards.py
+          git diff --exit-code grafana/dashboards
+
+  e2e:
+    name: End-to-end (Kafka -> processor -> ClickHouse)
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install clickhouse-connect
+      - name: Start the pipeline
+        run: docker compose up -d --build kafka clickhouse generator processor
+        env:
+          EVENTS_PER_SECOND: "400"
+      - name: Smoke test
+        run: python scripts/smoke_test.py
+      - name: Survives a ClickHouse outage
+        run: |
+          docker compose stop clickhouse
+          sleep 20
+          docker compose start clickhouse
+          sleep 30
+          python scripts/smoke_test.py
+      - name: Logs on failure
+        if: failure()
+        run: docker compose logs --tail 200
+      - name: Tear down
+        if: always()
+        run: docker compose down -v
