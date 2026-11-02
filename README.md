@@ -25,6 +25,7 @@ Everything runs locally with one command and is covered by unit tests and an end
 | Partner ingestion | Airflow pulls FX rates from a flaky REST API (retries with backoff, auth errors fail fast, validation and a circuit breaker on rate jumps) and provider reports from FTP (sensor in reschedule mode, atomic files) |
 | Reconciliation | Per report window, a FULL JOIN of provider reports vs platform facts flags amount mismatches and rows missing on either side |
 | Batch modelling | Daily player and provider marts rebuilt idempotently with write-audit-publish: staging, data-quality audits against raw facts, `REPLACE PARTITION` |
+| Performance | Reproducible benchmarks for the pipeline, ingest and queries with `EXPLAIN` analysis (see [Performance](#performance)) |
 | Engineering hygiene | Dashboards as code, schema/code consistency tests, ruff, GitHub Actions with a dockerised e2e test |
 
 ## Architecture
@@ -168,6 +169,33 @@ the smoke test passes again: no duplicate spins, and MV turnover equals raw turn
 the same scenario on every PR, then waits for the Airflow DAGs and checks that none of their
 runs failed.
 
+## Performance
+
+Measured on a 4 vCPU VM where Kafka, ClickHouse and the processors share the
+same cores. Full method, plans and discussion: [docs/benchmarks.md](docs/benchmarks.md).
+
+| Ingest (300k-event backlog) | Drain rate | Parts created | Processor CPU |
+| --- | ---: | ---: | ---: |
+| 500-row batches, 1 processor | 9,662 ev/s | 1,201 | 56% |
+| 20k-row batches, 1 processor | 25,855 ev/s | 64 | 91% |
+| 20k-row batches, 3 processors | **45,028 ev/s** | 76 | 194% |
+
+A single processor is CPU-bound in Python at about 75k events/s per core for the pure
+pipeline (two thirds of it in pydantic's compiled validator); larger batches cut ClickHouse
+parts 19×, and replicas scale out across Kafka partitions.
+
+| Question (30M spins, 3M bets) | Naive | Designed | Why |
+| --- | ---: | ---: | --- |
+| GGR per brand, last 7 days | 108 ms, 7M rows | **14 ms**, 0.5M rows | minute rollup from a materialized view, exact `Decimal` sums |
+| One game on one brand, one day | | **7 ms**, 4 of 3,690 granules | partitions by day + `ORDER BY (brand, game_id, ts)` |
+| One player's history | 200 ms, full scan | **33 ms**, 30 granules | projection ordered by `player_id`, +20% storage |
+| Unique players, 30 days | 1,370 ms, 107 MiB (`uniqExact`) | **402 ms**, 17 MiB (`uniq`, -0.23%) | approximate where a dashboard allows it |
+| Bets by current status, unmerged | 1,070 ms, 1 GiB (`argMax`) | **502 ms**, 77 MiB (`FINAL`) | `FINAL` is the faster dedup on 24.8; plain `GROUP BY` double-counts |
+
+`make bench-pipeline`, `make bench-ingest` and `make bench-queries` reproduce them. CI runs a
+1M-row query benchmark on every PR and fails if the rollup or either dedup strategy disagrees
+with the raw data.
+
 ## Known trade-offs and next steps
 
 - The dedup window lives in memory, so a processor crash followed by a replay can double-count
@@ -177,7 +205,6 @@ runs failed.
   `Distributed` tables) and role-based access are the next milestone.
 - Reconciliation compares casino rounds only. Sportsbook feed settlement checks would follow
   the same pattern.
-- **Planned:** a load benchmark with query-plan analysis.
 
 ## Layout
 
@@ -191,6 +218,7 @@ clickhouse/            schema + server config (Prometheus endpoint)
 grafana/               dashboard builder, provisioned datasources and dashboards
 prometheus/            scrape config
 scripts/smoke_test.py  end-to-end invariants
+scripts/bench_*.py     pipeline, ingest and query benchmarks (docs/benchmarks.md)
 sql/examples.sql       analytics queries and an EXPLAIN walkthrough
 tests/                 unit tests (simulator statistics, pipeline, partners, schema/code
                        consistency) and DAG integrity tests

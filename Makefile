@@ -53,7 +53,16 @@ dag-errors: ## Show DAG import errors
 ch: ## Open a ClickHouse client
 	$(COMPOSE) exec clickhouse clickhouse-client -u delta1 --password delta1 -d delta1
 
+bench-pipeline: ## Per-core cost of the processor's pure pipeline (no stack needed)
+	$(PY) scripts/bench_pipeline.py --profile
+
+bench-ingest: ## Drain-rate benchmark: batch sizes and processor replicas (pauses the generator)
+	COMPOSE="$(COMPOSE)" $(PY) scripts/bench_ingest.py
+
+bench-queries: ## Query benchmark on ~30M synthetic rows in an isolated bench database
+	$(PY) scripts/bench_queries.py
+
 outage: ## Stop ClickHouse for 30s to watch lag build up and drain
 	$(COMPOSE) stop clickhouse && sleep 30 && $(COMPOSE) start clickhouse
 
-.PHONY: help up down clean ps logs dev test lint fmt dashboards smoke smoke-batch dag-errors ch outage
+.PHONY: help up down clean ps logs dev test lint fmt dashboards smoke smoke-batch dag-errors ch bench-pipeline bench-ingest bench-queries outage
